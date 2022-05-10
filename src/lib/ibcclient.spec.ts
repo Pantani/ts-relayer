@@ -1,6 +1,7 @@
 import { sleep } from '@cosmjs/utils';
 import test from 'ava';
-import { MsgTransfer } from 'cosmjs-types/ibc/applications/transfer/v1/tx';
+
+import { MsgTransfer } from '../codec/ibc/applications/transfer/v1/tx';
 
 import { buildCreateClientArgs, prepareConnectionHandshake } from './ibcclient';
 import { Link } from './link';
@@ -271,7 +272,10 @@ test.serial('tests parsing with multi-message', async (t) => {
       timeoutHeight,
     }),
   };
-  const { logs: multiLog } = await nodeA.sendMultiMsg([msg, msg2]);
+  const { logs: multiLog } = await nodeA.sendMultiMsg(
+    [msg, msg2],
+    nodeA.fees.updateClient
+  );
   const multiPackets = parsePacketsFromLogs(multiLog);
   t.is(multiPackets.length, 2);
   // no acks here

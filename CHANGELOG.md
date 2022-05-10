@@ -1,39 +1,5 @@
 # Changelog
 
-## 0.4.0
-
-### Minor Changes
-
-- af6f99a: Use cosmjs-types for the IBC types
-- 8d2d1ba: Update to CosmJS 0.27
-- 93087da: Auto-calculate gas for all transactions, remove gas_limit config field
-
-### Patch Changes
-
-- f15b498: Update gaiad to v6.0.0 in CI
-- c48b87c: Upgrade ts-proto, regenerate codec and fix handling of pagination keys
-- af6f99a: Update CI to test wasmd 0.21
-
-## 0.3.1
-
-### Patch Changes
-
-- 3e0ade2: Fix misusage of commander for async actions
-- 97c5530: Avoid the usage of Long constructor with one argument
-
-## 0.3.0
-
-### Minor Changes
-
-- ca2b9fe: Update cosmjs to 0.26
-
-## 0.2.1
-
-### Patch Changes
-
-- c8408bb: Added Juno testnet details to registry
-- efe3d0d: Update yarn dependencies
-
 ## 0.2.0
 
 ### Minor Changes

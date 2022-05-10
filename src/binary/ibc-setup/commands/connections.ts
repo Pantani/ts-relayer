@@ -1,8 +1,7 @@
 import path from 'path';
 
-import { State as ConnectionState } from 'cosmjs-types/ibc/core/connection/v1/connection';
-import { IdentifiedConnection } from 'cosmjs-types/ibc/core/connection/v1/connection';
-
+import { State as ConnectionState } from '../../../codec/ibc/core/connection/v1/connection';
+import { IdentifiedConnection } from '../../../codec/ibc/core/connection/v1/connection';
 import { registryFile } from '../../constants';
 import { Logger } from '../../create-logger';
 import { borderlessTable } from '../../utils/borderless-table';
@@ -90,8 +89,9 @@ export async function run(options: Options, logger: Logger) {
 
   const client = await signingClient(chain, mnemonic, logger);
 
-  const { connections: allConnections } =
-    await client.query.ibc.connection.allConnections();
+  const {
+    connections: allConnections,
+  } = await client.query.ibc.connection.allConnections();
 
   const connections = allConnections.map((connection: IdentifiedConnection) => [
     connection.id,

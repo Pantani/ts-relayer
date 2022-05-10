@@ -1,22 +1,23 @@
 import { fromUtf8, toHex, toUtf8 } from '@cosmjs/encoding';
-import { DeliverTxResponse, logs } from '@cosmjs/stargate';
+import { BroadcastTxFailure, Coin, logs, StdFee } from '@cosmjs/stargate';
 const { parseEvent } = logs;
 import {
   BlockResultsResponse,
   ReadonlyDateWithNanoseconds,
+  Header as RpcHeader,
   ValidatorPubkey as RpcPubKey,
-  tendermint34,
 } from '@cosmjs/tendermint-rpc';
-import { HashOp, LengthOp } from 'cosmjs-types/confio/proofs';
-import { Timestamp } from 'cosmjs-types/google/protobuf/timestamp';
-import { Packet } from 'cosmjs-types/ibc/core/channel/v1/channel';
-import { Height } from 'cosmjs-types/ibc/core/client/v1/client';
+import Long from 'long';
+
+import { HashOp, LengthOp } from '../codec/confio/proofs';
+import { Timestamp } from '../codec/google/protobuf/timestamp';
+import { Packet } from '../codec/ibc/core/channel/v1/channel';
+import { Height } from '../codec/ibc/core/client/v1/client';
 import {
   ClientState as TendermintClientState,
   ConsensusState as TendermintConsensusState,
-} from 'cosmjs-types/ibc/lightclients/tendermint/v1/tendermint';
-import { PublicKey as ProtoPubKey } from 'cosmjs-types/tendermint/crypto/keys';
-import Long from 'long';
+} from '../codec/ibc/lightclients/tendermint/v1/tendermint';
+import { PublicKey as ProtoPubKey } from '../codec/tendermint/crypto/keys';
 
 import { PacketWithMetadata } from './endpoint';
 
@@ -25,8 +26,8 @@ export interface Ack {
   readonly originalPacket: Packet;
 }
 
-export function createDeliverTxFailureMessage(
-  result: DeliverTxResponse
+export function createBroadcastTxErrorMessage(
+  result: BroadcastTxFailure
 ): string {
   return `Error when broadcasting tx ${result.transactionHash} at height ${result.height}. Code: ${result.code}; Raw log: ${result.rawLog}`;
 }
@@ -56,7 +57,7 @@ export function parseRevisionNumber(chainId: string): Long {
   if (match && match.length >= 2) {
     return Long.fromString(match[1]);
   }
-  return Long.ZERO;
+  return new Long(0);
 }
 
 // may will run the transform if value is defined, otherwise returns undefined
@@ -96,7 +97,7 @@ export function timestampFromDateNanos(
 ): Timestamp {
   const nanos = (date.getTime() % 1000) * 1000000 + (date.nanoseconds ?? 0);
   return Timestamp.fromPartial({
-    seconds: Long.fromNumber(date.getTime() / 1000),
+    seconds: new Long(date.getTime() / 1000),
     nanos,
   });
 }
@@ -108,7 +109,7 @@ export function secondsFromDateNanos(
 }
 
 export function buildConsensusState(
-  header: tendermint34.Header
+  header: RpcHeader
 ): TendermintConsensusState {
   return TendermintConsensusState.fromPartial({
     timestamp: timestampFromDateNanos(header.time),
@@ -168,13 +169,13 @@ export function buildClientState(
       denominator: Long.fromInt(3),
     },
     unbondingPeriod: {
-      seconds: Long.fromNumber(unbondingPeriodSec),
+      seconds: new Long(unbondingPeriodSec),
     },
     trustingPeriod: {
-      seconds: Long.fromNumber(trustPeriodSec),
+      seconds: new Long(trustPeriodSec),
     },
     maxClockDrift: {
-      seconds: Long.fromNumber(20),
+      seconds: new Long(20),
     },
     latestHeight: height,
     proofSpecs: [iavlSpec, tendermintSpec],
@@ -321,6 +322,21 @@ export function parseAck({ type, attributes }: ParsedEvent): Ack {
     acknowledgement,
     originalPacket,
   };
+}
+
+export function multiplyFees({ gas, amount }: StdFee, mult: number): StdFee {
+  const multGas = Number.parseInt(gas, 10) * mult;
+  const multAmount = amount.map((c) => multiplyCoin(c, mult));
+  const result = {
+    gas: multGas.toString(),
+    amount: multAmount,
+  };
+  return result;
+}
+
+export function multiplyCoin({ amount, denom }: Coin, mult: number): Coin {
+  const multAmount = Number.parseInt(amount, 10) * mult;
+  return { amount: multAmount.toString(), denom };
 }
 
 // return true if a > b, or a undefined

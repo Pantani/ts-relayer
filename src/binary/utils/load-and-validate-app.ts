@@ -8,13 +8,11 @@ import yaml from 'js-yaml';
 import { appFile } from '../constants';
 import { AppConfig } from '../types';
 
-import { isNoExistError } from './is-no-exist-error';
-
 function readAppYaml(filepath: string) {
   try {
     return fs.readFileSync(filepath, 'utf-8');
   } catch (error) {
-    if (isNoExistError(error)) {
+    if (error.code !== 'ENOENT') {
       throw error;
     }
 

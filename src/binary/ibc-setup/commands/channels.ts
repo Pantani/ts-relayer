@@ -1,7 +1,6 @@
 import path from 'path';
 
-import { State as ChannelState } from 'cosmjs-types/ibc/core/channel/v1/channel';
-
+import { State as ChannelState } from '../../../codec/ibc/core/channel/v1/channel';
 import { registryFile } from '../../constants';
 import { Logger } from '../../create-logger';
 import { borderlessTable } from '../../utils/borderless-table';
@@ -103,8 +102,9 @@ export async function run(options: Options, logger: Logger) {
 
   const client = await signingClient(chain, mnemonic, logger);
 
-  const { channels: allChannels } =
-    await client.query.ibc.channel.allChannels();
+  const {
+    channels: allChannels,
+  } = await client.query.ibc.channel.allChannels();
 
   const channels = allChannels
     .filter(

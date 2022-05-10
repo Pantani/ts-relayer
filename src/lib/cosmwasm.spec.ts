@@ -13,16 +13,30 @@ const codeIds: Record<string, number> = {
 
 interface WasmData {
   wasmUrl: string;
+  codeMeta: {
+    source: string;
+    builder: string;
+  };
 }
 
 const contracts: Record<string, WasmData> = {
   cw20: {
     wasmUrl:
-      'https://github.com/CosmWasm/cosmwasm-plus/releases/download/v0.13.1/cw20_base.wasm',
+      'https://github.com/CosmWasm/cosmwasm-plus/releases/download/v0.6.1/cw20_base.wasm',
+    codeMeta: {
+      source:
+        'https://github.com/CosmWasm/cosmwasm-plus/tree/v0.6.0/contracts/cw20-base',
+      builder: 'cosmwasm/workspace-optimizer:0.11.0',
+    },
   },
   ics20: {
     wasmUrl:
-      'https://github.com/CosmWasm/cosmwasm-plus/releases/download/v0.13.1/cw20_ics20.wasm',
+      'https://github.com/CosmWasm/cosmwasm-plus/releases/download/v0.6.1/cw20_ics20.wasm',
+    codeMeta: {
+      source:
+        'https://github.com/CosmWasm/cosmwasm-plus/tree/v0.6.0/contracts/cw20-ics20',
+      builder: 'cosmwasm/workspace-optimizer:0.11.0',
+    },
   },
 };
 
@@ -44,7 +58,7 @@ test.before(async (t) => {
     const receipt = await cosmwasm.sign.upload(
       cosmwasm.senderAddress,
       wasm,
-      'auto',
+      contract.codeMeta,
       `Upload ${name}`
     );
     console.debug(`Upload ${name} with CodeID: ${receipt.codeId}`);
@@ -94,8 +108,7 @@ test.serial('successfully instantiate contracts', async (t) => {
     cosmwasm.senderAddress,
     codeIds.cw20,
     initMsg,
-    'DEMO',
-    'auto'
+    'DEMO'
   );
   t.truthy(cw20Addr);
 
@@ -105,20 +118,12 @@ test.serial('successfully instantiate contracts', async (t) => {
   // instantiate ics20
   const ics20Msg = {
     default_timeout: 3600,
-    gov_contract: cosmwasm.senderAddress,
-    allowlist: [
-      {
-        contract: cw20Addr,
-        gas_limit: 250000,
-      },
-    ],
   };
   const { contractAddress: ics20Addr } = await cosmwasm.sign.instantiate(
     cosmwasm.senderAddress,
     codeIds.ics20,
     ics20Msg,
-    'ICS',
-    'auto'
+    'ICS'
   );
   t.truthy(ics20Addr);
 });
@@ -129,15 +134,12 @@ test.serial('set up channel with ics20 contract', async (t) => {
   // instantiate ics20
   const ics20Msg = {
     default_timeout: 3600,
-    gov_contract: cosmwasm.senderAddress,
-    allowlist: [],
   };
   const { contractAddress: ics20Addr } = await cosmwasm.sign.instantiate(
     cosmwasm.senderAddress,
     codeIds.ics20,
     ics20Msg,
-    'ICS',
-    'auto'
+    'ICS'
   );
   t.truthy(ics20Addr);
 
@@ -164,8 +166,7 @@ test.serial('send packets with ics20 contract', async (t) => {
     cosmwasm.senderAddress,
     codeIds.cw20,
     initMsg,
-    'CASH',
-    'auto'
+    'CASH'
   );
   t.truthy(cw20Addr);
   let bal = await balance(cosmwasm, cw20Addr);
@@ -174,20 +175,12 @@ test.serial('send packets with ics20 contract', async (t) => {
   // instantiate ics20
   const ics20Msg = {
     default_timeout: 3600,
-    gov_contract: cosmwasm.senderAddress,
-    allowlist: [
-      {
-        contract: cw20Addr,
-        gas_limit: 250000,
-      },
-    ],
   };
   const { contractAddress: ics20Addr } = await cosmwasm.sign.instantiate(
     cosmwasm.senderAddress,
     codeIds.ics20,
     ics20Msg,
-    'ICSX',
-    'auto'
+    'ICSX'
   );
   t.truthy(ics20Addr);
   // FIXME: query this when https://github.com/cosmos/cosmjs/issues/836 is resolved
@@ -220,7 +213,6 @@ test.serial('send packets with ics20 contract', async (t) => {
     cosmwasm.senderAddress,
     cw20Addr,
     sendMsg,
-    'auto',
     'Send CW20 tokens via ICS20'
   );
 

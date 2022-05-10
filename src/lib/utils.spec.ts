@@ -7,6 +7,8 @@ import Long from 'long';
 
 import {
   heightGreater,
+  multiplyCoin,
+  multiplyFees,
   parseHeightAttribute,
   parseRevisionNumber,
   secondsFromDateNanos,
@@ -100,21 +102,46 @@ test('height based timeouts properly', (t) => {
   t.false(heightGreater(height1a, height1b));
 });
 
+test('properly multiplies coin', (t) => {
+  const input = { amount: '1212', denom: 'foo' };
+  const output = multiplyCoin(input, 3);
+  t.deepEqual(output, { amount: '3636', denom: 'foo' });
+
+  const input2 = { amount: '654321', denom: 'umuon' };
+  const output2 = multiplyCoin(input2, 2);
+  t.deepEqual(output2, { amount: '1308642', denom: 'umuon' });
+});
+
+test('properly multiplies fees', (t) => {
+  const input = {
+    gas: '12345',
+    amount: [
+      {
+        amount: '654321',
+        denom: 'umuon',
+      },
+    ],
+  };
+  const out = multiplyFees(input, 2);
+  t.deepEqual(out.gas, '24690');
+  t.deepEqual(out.amount, [{ amount: '1308642', denom: 'umuon' }]);
+});
+
 test('Properly determines height-based timeouts', (t) => {
   // proper heights
   t.deepEqual(parseHeightAttribute('1-34'), {
-    revisionNumber: Long.fromNumber(1),
-    revisionHeight: Long.fromNumber(34),
+    revisionNumber: new Long(1),
+    revisionHeight: new Long(34),
   });
   t.deepEqual(parseHeightAttribute('17-3456'), {
-    revisionNumber: Long.fromNumber(17),
-    revisionHeight: Long.fromNumber(3456),
+    revisionNumber: new Long(17),
+    revisionHeight: new Long(3456),
   });
 
   // handles revision number 0 properly (this is allowed)
   t.deepEqual(parseHeightAttribute('0-1724'), {
-    revisionNumber: Long.fromNumber(0),
-    revisionHeight: Long.fromNumber(1724),
+    revisionNumber: new Long(0),
+    revisionHeight: new Long(1724),
   });
 
   // missing heights

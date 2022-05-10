@@ -6,6 +6,9 @@ const axios = require('axios');
 const { SigningCosmWasmClient } = require('@cosmjs/cosmwasm-stargate');
 const { GasPrice } = require('@cosmjs/stargate');
 const { DirectSecp256k1HdWallet } = require('@cosmjs/proto-signing');
+const {
+  QueryPacketReceiptRequest,
+} = require('@cosmjs/stargate/build/codec/ibc/core/channel/v1/query');
 
 // from src/lib/testutils.ts:wasmd
 const config = {
@@ -21,12 +24,22 @@ const contracts = [
   {
     name: 'cw20-base',
     wasmUrl:
-      'https://github.com/CosmWasm/cosmwasm-plus/releases/download/v0.13.1/cw20_base.wasm',
+      'https://github.com/CosmWasm/cosmwasm-plus/releases/download/v0.6.1/cw20_base.wasm',
+    codeMeta: {
+      source:
+        'https://github.com/CosmWasm/cosmwasm-plus/tree/v0.6.0/contracts/cw20-base',
+      builder: 'cosmwasm/workspace-optimizer:0.11.0',
+    },
   },
   {
     name: 'cw20-ics20',
     wasmUrl:
-      'https://github.com/CosmWasm/cosmwasm-plus/releases/download/v0.13.1/cw20_ics20.wasm',
+      'https://github.com/CosmWasm/cosmwasm-plus/releases/download/v0.6.1/cw20_ics20.wasm',
+    codeMeta: {
+      source:
+        'https://github.com/CosmWasm/cosmwasm-plus/tree/v0.6.0/contracts/cw20-ics20',
+      builder: 'cosmwasm/workspace-optimizer:0.11.0',
+    },
   },
 ];
 
@@ -47,6 +60,9 @@ async function main() {
   const options = {
     prefix: config.bech32prefix,
     gasPrice: config.gasPrice,
+    gasLimits: {
+      upload: 1750000,
+    },
   };
   const client = await SigningCosmWasmClient.connectWithSigner(
     config.endpoint,
@@ -61,7 +77,7 @@ async function main() {
     const receipt = await client.upload(
       address,
       wasm,
-      'auto',
+      contract.codeMeta,
       `Upload ${contract.name}`
     );
     console.debug(`Upload succeeded. Receipt: ${JSON.stringify(receipt)}`);

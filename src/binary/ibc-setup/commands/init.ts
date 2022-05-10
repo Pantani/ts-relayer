@@ -10,7 +10,6 @@ import { Logger } from '../../create-logger';
 import { feeDenom } from '../../types';
 import { deriveAddress } from '../../utils/derive-address';
 import { generateMnemonic } from '../../utils/generate-mnemonic';
-import { isNoExistError } from '../../utils/is-no-exist-error';
 import { loadAndValidateRegistry } from '../../utils/load-and-validate-registry';
 import { resolveOption } from '../../utils/options/resolve-option';
 import { resolveHomeOption } from '../../utils/options/shared/resolve-home-option';
@@ -34,7 +33,7 @@ function copyRegistryFile(from: string, to: string) {
     fs.copyFileSync(from, to);
     console.log(`Copied existing registry from ${from} to ${to}.`);
   } catch (error) {
-    if (isNoExistError(error)) {
+    if (error.code === 'ENOENT') {
       throw new Error(
         `No such file: ${from}. Make sure that "--registry-from" points at existing relayer's home dir.`
       );

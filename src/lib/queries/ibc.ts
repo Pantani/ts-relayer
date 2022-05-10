@@ -4,9 +4,11 @@ import {
   createProtobufRpcClient,
   QueryClient,
 } from '@cosmjs/stargate';
-import { CommitmentProof } from 'cosmjs-types/confio/proofs';
-import { Any } from 'cosmjs-types/google/protobuf/any';
-import { Channel } from 'cosmjs-types/ibc/core/channel/v1/channel';
+import Long from 'long';
+
+import { CommitmentProof } from '../../codec/confio/proofs';
+import { Any } from '../../codec/google/protobuf/any';
+import { Channel } from '../../codec/ibc/core/channel/v1/channel';
 import {
   QueryClientImpl as ChannelQuery,
   QueryChannelClientStateResponse,
@@ -22,8 +24,8 @@ import {
   QueryPacketReceiptResponse,
   QueryUnreceivedAcksResponse,
   QueryUnreceivedPacketsResponse,
-} from 'cosmjs-types/ibc/core/channel/v1/query';
-import { Height } from 'cosmjs-types/ibc/core/client/v1/client';
+} from '../../codec/ibc/core/channel/v1/query';
+import { Height } from '../../codec/ibc/core/client/v1/client';
 import {
   QueryClientImpl as ClientQuery,
   QueryClientParamsResponse,
@@ -32,9 +34,9 @@ import {
   QueryConsensusStateRequest,
   QueryConsensusStateResponse,
   QueryConsensusStatesResponse,
-} from 'cosmjs-types/ibc/core/client/v1/query';
-import { MerkleProof } from 'cosmjs-types/ibc/core/commitment/v1/commitment';
-import { ConnectionEnd } from 'cosmjs-types/ibc/core/connection/v1/connection';
+} from '../../codec/ibc/core/client/v1/query';
+import { MerkleProof } from '../../codec/ibc/core/commitment/v1/commitment';
+import { ConnectionEnd } from '../../codec/ibc/core/connection/v1/connection';
 import {
   QueryClientImpl as ConnectionQuery,
   QueryClientConnectionsResponse,
@@ -43,13 +45,12 @@ import {
   QueryConnectionConsensusStateResponse,
   QueryConnectionResponse,
   QueryConnectionsResponse,
-} from 'cosmjs-types/ibc/core/connection/v1/query';
+} from '../../codec/ibc/core/connection/v1/query';
 import {
   ClientState as TendermintClientState,
   ConsensusState as TendermintConsensusState,
-} from 'cosmjs-types/ibc/lightclients/tendermint/v1/tendermint';
-import { ProofOps } from 'cosmjs-types/tendermint/crypto/proof';
-import Long from 'long';
+} from '../../codec/ibc/lightclients/tendermint/v1/tendermint';
+import { ProofOps } from '../../codec/tendermint/crypto/proof';
 
 function decodeTendermintClientStateAny(
   clientState: Any | undefined
@@ -281,7 +282,7 @@ export function setupIbcExtension(base: QueryClient): IbcExtension {
             });
             channels.push(...response.channels);
             key = response.pagination?.nextKey;
-          } while (key && key.length);
+          } while (key);
           return {
             channels,
             height: response.height,
@@ -306,7 +307,7 @@ export function setupIbcExtension(base: QueryClient): IbcExtension {
             });
             channels.push(...response.channels);
             key = response.pagination?.nextKey;
-          } while (key && key.length);
+          } while (key);
           return {
             channels,
             height: response.height,
@@ -361,7 +362,7 @@ export function setupIbcExtension(base: QueryClient): IbcExtension {
             });
             commitments.push(...response.commitments);
             key = response.pagination?.nextKey;
-          } while (key && key.length);
+          } while (key);
           return {
             commitments,
             height: response.height,
@@ -412,7 +413,7 @@ export function setupIbcExtension(base: QueryClient): IbcExtension {
             });
             acknowledgements.push(...response.acknowledgements);
             key = response.pagination?.nextKey;
-          } while (key && key.length);
+          } while (key);
           return {
             acknowledgements,
             height: response.height,
@@ -465,7 +466,7 @@ export function setupIbcExtension(base: QueryClient): IbcExtension {
             });
             clientStates.push(...response.clientStates);
             key = response.pagination?.nextKey;
-          } while (key && key.length);
+          } while (key);
           return {
             clientStates,
           };
@@ -497,7 +498,7 @@ export function setupIbcExtension(base: QueryClient): IbcExtension {
             });
             consensusStates.push(...response.consensusStates);
             key = response.pagination?.nextKey;
-          } while (key && key.length);
+          } while (key);
           return {
             consensusStates,
           };
@@ -525,7 +526,7 @@ export function setupIbcExtension(base: QueryClient): IbcExtension {
             });
             clientStates.push(...response.clientStates);
             key = response.pagination?.nextKey;
-          } while (key && key.length);
+          } while (key);
           return clientStates.map(({ clientState }) =>
             decodeTendermintClientStateAny(clientState)
           );
@@ -564,7 +565,7 @@ export function setupIbcExtension(base: QueryClient): IbcExtension {
             });
             connections.push(...response.connections);
             key = response.pagination?.nextKey;
-          } while (key && key.length);
+          } while (key);
           return {
             connections,
             height: response.height,

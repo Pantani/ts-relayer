@@ -3,10 +3,13 @@ import { EncodeObject, OfflineSigner, Registry } from '@cosmjs/proto-signing';
 import {
   AuthExtension,
   BankExtension,
+  buildFeeTable,
   Coin,
   defaultRegistryTypes,
+  FeeTable,
+  GasLimits,
   GasPrice,
-  isDeliverTxFailure,
+  isBroadcastTxFailure,
   logs,
   QueryClient,
   setupAuthExtension,
@@ -15,16 +18,21 @@ import {
   SigningStargateClient,
   SigningStargateClientOptions,
   StakingExtension,
+  StdFee,
 } from '@cosmjs/stargate';
 import {
+  CommitResponse,
   ReadonlyDateWithNanoseconds,
-  tendermint34,
+  Header as RpcHeader,
   Tendermint34Client,
 } from '@cosmjs/tendermint-rpc';
 import { arrayContentEquals, assert, sleep } from '@cosmjs/utils';
-import { Any } from 'cosmjs-types/google/protobuf/any';
-import { MsgTransfer } from 'cosmjs-types/ibc/applications/transfer/v1/tx';
-import { Order, Packet, State } from 'cosmjs-types/ibc/core/channel/v1/channel';
+import cloneDeep from 'lodash/cloneDeep';
+import Long from 'long';
+
+import { Any } from '../codec/google/protobuf/any';
+import { MsgTransfer } from '../codec/ibc/applications/transfer/v1/tx';
+import { Order, Packet, State } from '../codec/ibc/core/channel/v1/channel';
 import {
   MsgAcknowledgement,
   MsgChannelOpenAck,
@@ -33,33 +41,31 @@ import {
   MsgChannelOpenTry,
   MsgRecvPacket,
   MsgTimeout,
-} from 'cosmjs-types/ibc/core/channel/v1/tx';
-import { Height } from 'cosmjs-types/ibc/core/client/v1/client';
+} from '../codec/ibc/core/channel/v1/tx';
+import { Height } from '../codec/ibc/core/client/v1/client';
 import {
   MsgCreateClient,
   MsgUpdateClient,
-} from 'cosmjs-types/ibc/core/client/v1/tx';
-import { Version } from 'cosmjs-types/ibc/core/connection/v1/connection';
+} from '../codec/ibc/core/client/v1/tx';
+import { Version } from '../codec/ibc/core/connection/v1/connection';
 import {
   MsgConnectionOpenAck,
   MsgConnectionOpenConfirm,
   MsgConnectionOpenInit,
   MsgConnectionOpenTry,
-} from 'cosmjs-types/ibc/core/connection/v1/tx';
+} from '../codec/ibc/core/connection/v1/tx';
 import {
   ClientState as TendermintClientState,
   ConsensusState as TendermintConsensusState,
   Header as TendermintHeader,
-} from 'cosmjs-types/ibc/lightclients/tendermint/v1/tendermint';
+} from '../codec/ibc/lightclients/tendermint/v1/tendermint';
 import {
   blockIDFlagFromJSON,
   Commit,
   Header,
   SignedHeader,
-} from 'cosmjs-types/tendermint/types/types';
-import { ValidatorSet } from 'cosmjs-types/tendermint/types/validator';
-import cloneDeep from 'lodash/cloneDeep';
-import Long from 'long';
+} from '../codec/tendermint/types/types';
+import { ValidatorSet } from '../codec/tendermint/types/validator';
 
 import { Logger, NoopLogger } from './logger';
 import { IbcExtension, setupIbcExtension } from './queries/ibc';
@@ -67,8 +73,9 @@ import {
   Ack,
   buildClientState,
   buildConsensusState,
-  createDeliverTxFailureMessage,
+  createBroadcastTxErrorMessage,
   mapRpcPubKeyToProto,
+  multiplyFees,
   parseRevisionNumber,
   presentPacketData,
   subtractBlock,
@@ -107,7 +114,7 @@ const defaultConnectionVersion: Version = {
   features: ['ORDER_ORDERED', 'ORDER_UNORDERED'],
 };
 // this is a sane default, but we can revisit it
-const defaultDelayPeriod = Long.ZERO;
+const defaultDelayPeriod = new Long(0);
 
 function ibcRegistry(): Registry {
   return new Registry([
@@ -180,13 +187,40 @@ export interface ChannelInfo {
   readonly channelId: string;
 }
 
+export interface IbcFeeTable extends FeeTable {
+  readonly initClient: StdFee;
+  readonly updateClient: StdFee;
+  readonly initConnection: StdFee;
+  readonly connectionHandshake: StdFee;
+  readonly initChannel: StdFee;
+  readonly channelHandshake: StdFee;
+  readonly receivePacket: StdFee;
+  readonly ackPacket: StdFee;
+  readonly timeoutPacket: StdFee;
+  readonly transfer: StdFee;
+}
+
 export type IbcClientOptions = SigningStargateClientOptions & {
+  gasLimits?: Partial<GasLimits<IbcFeeTable>>;
   logger?: Logger;
-  gasPrice: GasPrice;
+};
+
+const defaultGasPrice = GasPrice.fromString('0.025ucosm');
+const defaultGasLimits: GasLimits<IbcFeeTable> = {
+  initClient: 150000,
+  updateClient: 600000,
+  initConnection: 150000,
+  connectionHandshake: 300000,
+  initChannel: 150000,
+  channelHandshake: 300000,
+  receivePacket: 300000,
+  ackPacket: 300000,
+  timeoutPacket: 300000,
+  transfer: 180000,
 };
 
 export class IbcClient {
-  public readonly gasPrice: GasPrice;
+  public readonly fees: IbcFeeTable;
   public readonly sign: SigningStargateClient;
   public readonly query: QueryClient &
     AuthExtension &
@@ -204,7 +238,7 @@ export class IbcClient {
     endpoint: string,
     signer: OfflineSigner,
     senderAddress: string,
-    options: IbcClientOptions
+    options: IbcClientOptions = {}
   ): Promise<IbcClient> {
     // override any registry setup, use the other options
     const mergedOptions = {
@@ -247,14 +281,18 @@ export class IbcClient {
     this.chainId = chainId;
     this.revisionNumber = parseRevisionNumber(chainId);
 
-    const { gasPrice, logger } = options;
-    this.gasPrice = gasPrice;
+    const { gasPrice = defaultGasPrice, gasLimits = {}, logger } = options;
+    this.fees = buildFeeTable<IbcFeeTable>(
+      gasPrice,
+      defaultGasLimits,
+      gasLimits
+    );
     this.logger = logger ?? new NoopLogger();
   }
 
   public revisionHeight(height: number): Height {
     return Height.fromPartial({
-      revisionHeight: Long.fromNumber(height),
+      revisionHeight: new Long(height),
       revisionNumber: this.revisionNumber,
     });
   }
@@ -284,14 +322,14 @@ export class IbcClient {
     return this.sign.getChainId();
   }
 
-  public async header(height: number): Promise<tendermint34.Header> {
+  public async header(height: number): Promise<RpcHeader> {
     this.logger.verbose(`Get header for height ${height}`);
     // TODO: expose header method on tmClient and use that
     const resp = await this.tm.blockchain(height, height);
     return resp.blockMetas[0].header;
   }
 
-  public async latestHeader(): Promise<tendermint34.Header> {
+  public async latestHeader(): Promise<RpcHeader> {
     // TODO: expose header method on tmClient and use that
     const block = await this.tm.block();
     return block.block.header;
@@ -330,7 +368,7 @@ export class IbcClient {
     await sleep(50);
   }
 
-  public getCommit(height?: number): Promise<tendermint34.CommitResponse> {
+  public getCommit(height?: number): Promise<CommitResponse> {
     this.logger.verbose(
       height === undefined
         ? 'Get latest commit'
@@ -357,13 +395,13 @@ export class IbcClient {
     const header = Header.fromPartial({
       ...rpcHeader,
       version: {
-        block: Long.fromNumber(rpcHeader.version.block),
+        block: new Long(rpcHeader.version.block),
       },
-      height: Long.fromNumber(rpcHeader.height),
+      height: new Long(rpcHeader.height),
       time: timestampFromDateNanos(rpcHeader.time),
       lastBlockId: {
-        hash: rpcHeader.lastBlockId?.hash,
-        partSetHeader: rpcHeader.lastBlockId?.parts,
+        hash: rpcHeader.lastBlockId.hash,
+        partSetHeader: rpcHeader.lastBlockId.parts,
       },
     });
 
@@ -373,7 +411,7 @@ export class IbcClient {
       blockIdFlag: blockIDFlagFromJSON(sig.blockIdFlag),
     }));
     const commit = Commit.fromPartial({
-      height: Long.fromNumber(rpcCommit.height),
+      height: new Long(rpcCommit.height),
       round: rpcCommit.round,
       blockId: {
         hash: rpcCommit.blockId.hash,
@@ -395,9 +433,9 @@ export class IbcClient {
     const mappedValidators = validators.validators.map((val) => ({
       address: val.address,
       pubKey: mapRpcPubKeyToProto(val.pubkey),
-      votingPower: Long.fromNumber(val.votingPower),
+      votingPower: new Long(val.votingPower),
       proposerPriority: val.proposerPriority
-        ? Long.fromNumber(val.proposerPriority)
+        ? new Long(val.proposerPriority)
         : undefined,
     }));
     const totalPower = validators.validators.reduce(
@@ -409,7 +447,7 @@ export class IbcClient {
     );
     return ValidatorSet.fromPartial({
       validators: mappedValidators,
-      totalVotingPower: Long.fromNumber(totalPower),
+      totalVotingPower: new Long(totalPower),
       proposer,
     });
   }
@@ -464,24 +502,27 @@ export class IbcClient {
     } = await this.query.ibc.proof.client.state(clientId, queryHeight);
 
     // This is the most recent state we have on this chain of the other
-    const { latestHeight: consensusHeight } =
-      await this.query.ibc.client.stateTm(clientId);
+    const {
+      latestHeight: consensusHeight,
+    } = await this.query.ibc.client.stateTm(clientId);
     assert(consensusHeight);
 
     // get the init proof
-    const { proof: proofConnection } =
-      await this.query.ibc.proof.connection.connection(
-        connectionId,
-        queryHeight
-      );
+    const {
+      proof: proofConnection,
+    } = await this.query.ibc.proof.connection.connection(
+      connectionId,
+      queryHeight
+    );
 
     // get the consensus proof
-    const { proof: proofConsensus } =
-      await this.query.ibc.proof.client.consensusState(
-        clientId,
-        consensusHeight,
-        queryHeight
-      );
+    const {
+      proof: proofConsensus,
+    } = await this.query.ibc.proof.client.consensusState(
+      clientId,
+      consensusHeight,
+      queryHeight
+    );
 
     return {
       clientId,
@@ -607,11 +648,10 @@ export class IbcClient {
       this.senderAddress,
       recipientAddress,
       transferAmount,
-      'auto',
       memo
     );
-    if (isDeliverTxFailure(result)) {
-      throw new Error(createDeliverTxFailureMessage(result));
+    if (isBroadcastTxFailure(result)) {
+      throw new Error(createBroadcastTxErrorMessage(result));
     }
     const parsedLogs = logs.parseRawLog(result.rawLog);
     return {
@@ -622,19 +662,19 @@ export class IbcClient {
   }
 
   /* Send any number of messages, you are responsible for encoding them */
-  public async sendMultiMsg(msgs: EncodeObject[]): Promise<MsgResult> {
+  public async sendMultiMsg(
+    msgs: EncodeObject[],
+    fees: StdFee
+  ): Promise<MsgResult> {
     this.logger.verbose(`Broadcast multiple msgs`);
     this.logger.debug(`Multiple msgs:`, {
       msgs,
+      fees,
     });
     const senderAddress = this.senderAddress;
-    const result = await this.sign.signAndBroadcast(
-      senderAddress,
-      msgs,
-      'auto'
-    );
-    if (isDeliverTxFailure(result)) {
-      throw new Error(createDeliverTxFailureMessage(result));
+    const result = await this.sign.signAndBroadcast(senderAddress, msgs, fees);
+    if (isBroadcastTxFailure(result)) {
+      throw new Error(createBroadcastTxErrorMessage(result));
     }
     const parsedLogs = logs.parseRawLog(result.rawLog);
     return {
@@ -669,10 +709,10 @@ export class IbcClient {
     const result = await this.sign.signAndBroadcast(
       senderAddress,
       [createMsg],
-      'auto'
+      this.fees.initClient
     );
-    if (isDeliverTxFailure(result)) {
-      throw new Error(createDeliverTxFailureMessage(result));
+    if (isBroadcastTxFailure(result)) {
+      throw new Error(createBroadcastTxErrorMessage(result));
     }
     const parsedLogs = logs.parseRawLog(result.rawLog);
 
@@ -721,10 +761,10 @@ export class IbcClient {
     const result = await this.sign.signAndBroadcast(
       senderAddress,
       [updateMsg],
-      'auto'
+      this.fees.updateClient
     );
-    if (isDeliverTxFailure(result)) {
-      throw new Error(createDeliverTxFailureMessage(result));
+    if (isBroadcastTxFailure(result)) {
+      throw new Error(createBroadcastTxErrorMessage(result));
     }
     const parsedLogs = logs.parseRawLog(result.rawLog);
     return {
@@ -758,10 +798,10 @@ export class IbcClient {
     const result = await this.sign.signAndBroadcast(
       senderAddress,
       [msg],
-      'auto'
+      this.fees.initConnection
     );
-    if (isDeliverTxFailure(result)) {
-      throw new Error(createDeliverTxFailureMessage(result));
+    if (isBroadcastTxFailure(result)) {
+      throw new Error(createBroadcastTxErrorMessage(result));
     }
     const parsedLogs = logs.parseRawLog(result.rawLog);
     const connectionId = logs.findAttribute(
@@ -832,10 +872,10 @@ export class IbcClient {
     const result = await this.sign.signAndBroadcast(
       senderAddress,
       [msg],
-      'auto'
+      this.fees.connectionHandshake
     );
-    if (isDeliverTxFailure(result)) {
-      throw new Error(createDeliverTxFailureMessage(result));
+    if (isBroadcastTxFailure(result)) {
+      throw new Error(createBroadcastTxErrorMessage(result));
     }
     const parsedLogs = logs.parseRawLog(result.rawLog);
     const myConnectionId = logs.findAttribute(
@@ -902,10 +942,10 @@ export class IbcClient {
     const result = await this.sign.signAndBroadcast(
       senderAddress,
       [msg],
-      'auto'
+      this.fees.connectionHandshake
     );
-    if (isDeliverTxFailure(result)) {
-      throw new Error(createDeliverTxFailureMessage(result));
+    if (isBroadcastTxFailure(result)) {
+      throw new Error(createBroadcastTxErrorMessage(result));
     }
     const parsedLogs = logs.parseRawLog(result.rawLog);
     return {
@@ -941,10 +981,10 @@ export class IbcClient {
     const result = await this.sign.signAndBroadcast(
       senderAddress,
       [msg],
-      'auto'
+      this.fees.connectionHandshake
     );
-    if (isDeliverTxFailure(result)) {
-      throw new Error(createDeliverTxFailureMessage(result));
+    if (isBroadcastTxFailure(result)) {
+      throw new Error(createBroadcastTxErrorMessage(result));
     }
     const parsedLogs = logs.parseRawLog(result.rawLog);
     return {
@@ -986,10 +1026,10 @@ export class IbcClient {
     const result = await this.sign.signAndBroadcast(
       senderAddress,
       [msg],
-      'auto'
+      this.fees.initChannel
     );
-    if (isDeliverTxFailure(result)) {
-      throw new Error(createDeliverTxFailureMessage(result));
+    if (isBroadcastTxFailure(result)) {
+      throw new Error(createBroadcastTxErrorMessage(result));
     }
     const parsedLogs = logs.parseRawLog(result.rawLog);
     const channelId = logs.findAttribute(
@@ -1047,10 +1087,10 @@ export class IbcClient {
     const result = await this.sign.signAndBroadcast(
       senderAddress,
       [msg],
-      'auto'
+      this.fees.channelHandshake
     );
-    if (isDeliverTxFailure(result)) {
-      throw new Error(createDeliverTxFailureMessage(result));
+    if (isBroadcastTxFailure(result)) {
+      throw new Error(createBroadcastTxErrorMessage(result));
     }
     const parsedLogs = logs.parseRawLog(result.rawLog);
     const channelId = logs.findAttribute(
@@ -1103,10 +1143,10 @@ export class IbcClient {
     const result = await this.sign.signAndBroadcast(
       senderAddress,
       [msg],
-      'auto'
+      this.fees.channelHandshake
     );
-    if (isDeliverTxFailure(result)) {
-      throw new Error(createDeliverTxFailureMessage(result));
+    if (isBroadcastTxFailure(result)) {
+      throw new Error(createBroadcastTxErrorMessage(result));
     }
     const parsedLogs = logs.parseRawLog(result.rawLog);
     return {
@@ -1146,10 +1186,10 @@ export class IbcClient {
     const result = await this.sign.signAndBroadcast(
       senderAddress,
       [msg],
-      'auto'
+      this.fees.channelHandshake
     );
-    if (isDeliverTxFailure(result)) {
-      throw new Error(createDeliverTxFailureMessage(result));
+    if (isBroadcastTxFailure(result)) {
+      throw new Error(createBroadcastTxErrorMessage(result));
     }
     const parsedLogs = logs.parseRawLog(result.rawLog);
     return {
@@ -1220,10 +1260,10 @@ export class IbcClient {
     const result = await this.sign.signAndBroadcast(
       senderAddress,
       msgs,
-      'auto'
+      multiplyFees(this.fees.receivePacket, msgs.length)
     );
-    if (isDeliverTxFailure(result)) {
-      throw new Error(createDeliverTxFailureMessage(result));
+    if (isBroadcastTxFailure(result)) {
+      throw new Error(createBroadcastTxErrorMessage(result));
     }
     const parsedLogs = logs.parseRawLog(result.rawLog);
     return {
@@ -1303,10 +1343,10 @@ export class IbcClient {
     const result = await this.sign.signAndBroadcast(
       senderAddress,
       msgs,
-      'auto'
+      multiplyFees(this.fees.ackPacket, msgs.length)
     );
-    if (isDeliverTxFailure(result)) {
-      throw new Error(createDeliverTxFailureMessage(result));
+    if (isBroadcastTxFailure(result)) {
+      throw new Error(createBroadcastTxErrorMessage(result));
     }
     const parsedLogs = logs.parseRawLog(result.rawLog);
     return {
@@ -1386,10 +1426,10 @@ export class IbcClient {
     const result = await this.sign.signAndBroadcast(
       senderAddress,
       msgs,
-      'auto'
+      multiplyFees(this.fees.timeoutPacket, msgs.length)
     );
-    if (isDeliverTxFailure(result)) {
-      throw new Error(createDeliverTxFailureMessage(result));
+    if (isBroadcastTxFailure(result)) {
+      throw new Error(createBroadcastTxErrorMessage(result));
     }
     const parsedLogs = logs.parseRawLog(result.rawLog);
     return {
@@ -1416,11 +1456,10 @@ export class IbcClient {
       sourcePort,
       sourceChannel,
       timeoutHeight,
-      timeoutTime,
-      'auto'
+      timeoutTime
     );
-    if (isDeliverTxFailure(result)) {
-      throw new Error(createDeliverTxFailureMessage(result));
+    if (isBroadcastTxFailure(result)) {
+      throw new Error(createBroadcastTxErrorMessage(result));
     }
     const parsedLogs = logs.parseRawLog(result.rawLog);
     return {
